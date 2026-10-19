@@ -1,0 +1,8 @@
+build*/
+data/
+compile_commands.json
+.vscode/
+.idea/
+__pycache__/
+*.wal
+*.snap

@@ -1,0 +1,126 @@
+# Kubernetes deployment for nanoexchange.
+#   kubectl apply -f deploy/k8s/
+#
+# Design notes:
+#   * replicas: 1 + strategy Recreate. The order book is stateful and the WAL
+#     must have exactly ONE writer; two pods appending to the same log would
+#     corrupt it. Scaling out means sharding symbols across pods (see README).
+#   * The PersistentVolumeClaim keeps the WAL + snapshots when the pod is
+#     rescheduled, so the book is recovered on the new pod.
+#   * terminationGracePeriodSeconds gives the engine time to drain on SIGTERM.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: nanoexchange
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: nanoexchange-data
+  namespace: nanoexchange
+spec:
+  accessModes: ["ReadWriteOnce"]
+  resources:
+    requests:
+      storage: 1Gi
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: nanoexchange-config
+  namespace: nanoexchange
+data:
+  SYMBOLS: "AAPL,TSLA,INFY"
+  BOTS: "1"
+  THREADS: "2"
+  WAL_FSYNC: "0"
+  SNAPSHOT_EVERY: "50000"
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: nanoexchange
+  namespace: nanoexchange
+  labels: { app: nanoexchange }
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels: { app: nanoexchange }
+  template:
+    metadata:
+      labels: { app: nanoexchange }
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8080"
+        prometheus.io/path: /metrics
+    spec:
+      terminationGracePeriodSeconds: 15
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        fsGroup: 10001
+      containers:
+        - name: exchange
+          image: ghcr.io/YOUR_GITHUB_USERNAME/nanoexchange:latest
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: http
+              containerPort: 8080
+          envFrom:
+            - configMapRef: { name: nanoexchange-config }
+          env:
+            - { name: PORT, value: "8080" }
+            - { name: DATA_DIR, value: /data }
+          volumeMounts:
+            - { name: data, mountPath: /data }
+          readinessProbe:
+            httpGet: { path: /health, port: http }
+            initialDelaySeconds: 2
+            periodSeconds: 5
+          livenessProbe:
+            httpGet: { path: /health, port: http }
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          resources:
+            requests: { cpu: 250m, memory: 128Mi }
+            limits:   { cpu: "1",  memory: 512Mi }
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: nanoexchange-data
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: nanoexchange
+  namespace: nanoexchange
+spec:
+  selector: { app: nanoexchange }
+  ports:
+    - name: http
+      port: 80
+      targetPort: http
+---
+# Ingress via ingress-nginx (minikube: `minikube addons enable ingress`).
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: nanoexchange
+  namespace: nanoexchange
+  annotations:
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "3600"   # keep WebSockets open
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "3600"
+spec:
+  ingressClassName: nginx
+  rules:
+    - host: nanoexchange.local
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: nanoexchange
+                port: { name: http }

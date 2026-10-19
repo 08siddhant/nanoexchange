@@ -1,0 +1,97 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write   # push image to GitHub Container Registry
+
+env:
+  IMAGE: ghcr.io/${{ github.repository_owner }}/nanoexchange
+
+jobs:
+  # 1) Build + unit tests, three ways: normal, AddressSanitizer+UBSan, ThreadSanitizer.
+  build-test:
+    name: build & test (${{ matrix.sanitize || 'release' }})
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        sanitize: ["", address, thread]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install dependencies
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libboost-dev nlohmann-json3-dev libgtest-dev
+      - name: Configure
+        run: |
+          cmake -S . -B build \
+            -DCMAKE_BUILD_TYPE=${{ matrix.sanitize && 'Debug' || 'Release' }} \
+            -DNX_SANITIZE=${{ matrix.sanitize }}
+      - name: Build
+        run: cmake --build build -j"$(nproc)"
+      - name: Unit tests
+        run: ctest --test-dir build --output-on-failure
+      - name: Benchmark
+        if: matrix.sanitize == ''
+        run: |
+          ./build/nx_bench 500000 | tee bench.txt
+          { echo '### Benchmark (GitHub runner)'; echo '```'; cat bench.txt; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+
+  # 2) Build the Docker image, run it, and test it end-to-end over a real WebSocket.
+  docker:
+    needs: build-test
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - name: Build image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          load: true
+          tags: nanoexchange:ci
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+      - name: Run container
+        run: |
+          docker run -d --name nx -p 8080:8080 nanoexchange:ci
+          for i in $(seq 1 30); do curl -fs localhost:8080/health && break; sleep 1; done
+      - name: End-to-end WebSocket test
+        run: |
+          pip install websockets
+          python3 tests/e2e_ws_test.py ws://localhost:8080/ws
+      - name: Crash-recovery test (kill -9, restart, state must survive)
+        run: |
+          sleep 3   # let the bots write some orders to the WAL
+          docker kill --signal=KILL nx
+          docker start nx
+          for i in $(seq 1 30); do curl -fs localhost:8080/health && break; sleep 1; done
+          docker logs nx | grep recovery
+          docker logs nx | grep -q "wal_replayed=[1-9]" || (echo "nothing was replayed" && exit 1)
+      - name: Smoke load test with k6
+        run: |
+          curl -sSL https://github.com/grafana/k6/releases/download/v0.54.0/k6-v0.54.0-linux-amd64.tar.gz | tar xz
+          ./k6-v0.54.0-linux-amd64/k6 run -e VUS=20 -e DURATION=20s loadtest/ws_load.js
+      - name: Show logs
+        if: always()
+        run: docker logs nx | tail -50
+
+      - name: Log in to GHCR
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Push image
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        run: |
+          OWNER_IMAGE=$(echo "$IMAGE" | tr '[:upper:]' '[:lower:]')
+          docker tag nanoexchange:ci "$OWNER_IMAGE:latest"
+          docker tag nanoexchange:ci "$OWNER_IMAGE:${GITHUB_SHA::7}"
+          docker push "$OWNER_IMAGE:latest"
+          docker push "$OWNER_IMAGE:${GITHUB_SHA::7}"

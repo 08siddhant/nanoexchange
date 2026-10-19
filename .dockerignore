@@ -1,0 +1,7 @@
+build*/
+data/
+.git/
+loadtest/
+deploy/
+docs/
+*.md

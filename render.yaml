@@ -1,0 +1,16 @@
+# One-click deploy on Render (https://render.com): New > Blueprint > pick this repo.
+# The free plan sleeps after inactivity and has no persistent disk, so the
+# WAL lives in /tmp there (the book resets when the instance is replaced).
+services:
+  - type: web
+    name: nanoexchange
+    runtime: docker
+    plan: free
+    healthCheckPath: /health
+    envVars:
+      - key: DATA_DIR
+        value: /tmp/nxdata
+      - key: BOTS
+        value: "1"
+      - key: THREADS
+        value: "2"
