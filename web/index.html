@@ -65,7 +65,8 @@
   .tape { overflow-y: auto; flex: 1; }
   .tape .row { grid-template-columns: 1fr 1fr 1fr; cursor: default; }
   .tape .row.flash { animation: flash .6s ease-out; }
-  .tape .row.mine { background: rgba(245,185,66,.08); }
+  .tape .row.mine { background: rgba(245,185,66,.18); box-shadow: inset 3px 0 0 var(--accent); }
+  .tape .row.mine .num:first-child::after { content: ' you'; color: var(--accent); font-size: 10px; }
   @keyframes flash { from { background: var(--panel-2); } to { background: transparent; } }
 
   /* order form */
@@ -176,7 +177,8 @@
   const state = {
     ws: null, clientId: null, symbols: [], sym: null, connected: false, retry: 0,
     books: {}, trades: {}, series: {}, first: {},
-    mine: new Map(),           // "SYM:id" -> order
+    mine: new Map(),           // "SYM:id" -> open order
+    myIds: new Set(),          // "SYM:id" of every order I sent (for highlighting my trades)
     side: 'buy', type: 'limit', clSeq: 0,
   };
   const MAX_POINTS = 400, MAX_TAPE = 60;
@@ -267,6 +269,7 @@
   function onAck(m) {
     const what = `${m.side} ${m.qty} ${m.symbol}` + (m.orderType === 'limit' ? ` @ ${fmt(m.price)}` : ' mkt');
     log(`#${m.id} ${what} → ${m.status}` + (m.filled ? ` (filled ${m.filled})` : ''), m.status === 'unfilled' ? 'err' : 'ok');
+    state.myIds.add(m.symbol + ':' + m.id);
     if (m.remaining > 0) state.mine.set(m.symbol + ':' + m.id, { ...m });
     renderOrders();
   }
@@ -313,7 +316,7 @@
   function renderTape(fresh) {
     const list = state.trades[state.sym] || [];
     $('tape').innerHTML = list.map((t, i) => {
-      const mine = state.mine.has(state.sym + ':' + t.buyId) || state.mine.has(state.sym + ':' + t.sellId);
+      const mine = state.myIds.has(state.sym + ':' + t.buyId) || state.myIds.has(state.sym + ':' + t.sellId);
       const time = new Date(t.ts).toLocaleTimeString([], { hour12: false });
       return `<div class="row${i < fresh ? ' flash' : ''}${mine ? ' mine' : ''}">` +
         `<span class="num ${t.side === 'buy' ? 'up' : 'down'}">${fmt(t.price)}</span>` +

@@ -63,7 +63,7 @@ spec:
         fsGroup: 10001
       containers:
         - name: exchange
-          image: ghcr.io/YOUR_GITHUB_USERNAME/nanoexchange:latest
+          image: ghcr.io/08siddhant/nanoexchange:latest
           imagePullPolicy: IfNotPresent
           ports:
             - name: http

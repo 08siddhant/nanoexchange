@@ -2,6 +2,8 @@
 
 A real-time stock exchange simulator: a **C++20 order matching engine** with a **Boost.Beast WebSocket server**, crash recovery through a **write-ahead log**, live market-data streaming to a browser UI, and a full DevOps setup (**Docker, GitHub Actions CI/CD, Prometheus, Grafana, Kubernetes, k6**).
 
+**Live demo: https://nanoexchange.onrender.com** (free hosting: the first visit may take ~1 minute to wake the server)
+
 ![UI](docs/screenshot-desktop.png)
 
 ## Highlights
@@ -104,7 +106,7 @@ k6 run -e VUS=50 -e DURATION=60s loadtest/ws_load.js
 ```bash
 minikube start && minikube addons enable ingress
 docker build -t nanoexchange:latest . && minikube image load nanoexchange:latest
-sed -i 's#ghcr.io/YOUR_GITHUB_USERNAME/nanoexchange:latest#nanoexchange:latest#' deploy/k8s/nanoexchange.yaml
+sed -i 's#ghcr.io/08siddhant/nanoexchange:latest#nanoexchange:latest#' deploy/k8s/nanoexchange.yaml
 kubectl apply -f deploy/k8s/
 kubectl -n nanoexchange port-forward svc/nanoexchange 8080:80
 ```
